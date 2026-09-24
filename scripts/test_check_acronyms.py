@@ -859,3 +859,55 @@ def test_crlf_input_keeps_line_numbers(tmp_path: Path) -> None:
     path = _write(tmp_path, "m.md", b"First line.\r\n\r\nThe RCT ran.\r\n")
     report = build_report(path, "body", [], None)
     assert report["findings"][0]["line"] == 3
+
+
+# --- the review letter's attachment (#849, reviewer side) ----------------------
+
+ATTACHMENT_HEADING = "## Attachment: Acronym Check (advisory, #849)"
+DECISION_TEMPLATE = REPO / "academic-paper-reviewer" / "templates" / "editorial_decision_template.md"
+
+
+def _attachment(lang: str) -> str:
+    """The letter's last section, as the dispatching session appends it."""
+    report = (FIXTURES / f"expected.{lang}.md").read_text(encoding="utf-8")
+    return f"\n---\n\n{ATTACHMENT_HEADING}\n\n{report}"
+
+
+@pytest.mark.parametrize("lang", ["en", "zh-TW"])
+def test_the_attachment_leaves_the_panel_decision_unchanged(lang: str) -> None:
+    from scripts import check_panel_synthesis as cps
+    from scripts.test_check_panel_synthesis import FULL, reports, synthesis_for
+
+    # The checker reads the synthesis only through parse_synthesis and layer2_check.
+    panel = reports()
+    synthesis, expressions = synthesis_for(panel)
+    parsed = cps.parse_synthesis("s.md", synthesis + "\n" + _attachment(lang), FULL)
+    assert parsed == cps.parse_synthesis("s.md", synthesis, FULL)
+    assert cps.layer2_check(panel, FULL, expressions, parsed, []) == []
+
+
+def test_the_attachment_leaves_the_re_review_letter_extraction_unchanged() -> None:
+    from scripts.check_re_review_synthesis import parse_letter_blocks
+
+    # The Required Item Details section is the letter's last one here, so only the
+    # attachment's own heading ends it.
+    letter = ("# Editorial Decision\n\n## Required Revisions * (Must Fix)\n\n"
+              "### Required Item Details\n\n"
+              "**R1: Sample size justification**\n"
+              "- **Acceptance criteria**: A formal power analysis appears in Methods §3.2.\n\n"
+              "**R2: Missing limitation**\n"
+              "- **Acceptance criteria**: A limitations paragraph names the bounds.\n")
+    blocks = parse_letter_blocks(letter)
+    assert [rid for rid, _ in blocks] == ["R1", "R2"]
+    for lang in ("en", "zh-TW"):
+        assert parse_letter_blocks(letter + _attachment(lang)) == blocks
+
+
+def test_the_template_ends_the_letter_with_the_attachment() -> None:
+    text = DECISION_TEMPLATE.read_text(encoding="utf-8")
+    start = text.index("```markdown\n")
+    letter = text[start:text.index("\n```\n", start)]
+    assert [line for line in letter.split("\n") if line.startswith("## ")][-1] == ATTACHMENT_HEADING
+    assert "Leave this section out" in letter[letter.index(ATTACHMENT_HEADING):]
+    skill = (REPO / "academic-paper-reviewer" / "SKILL.md").read_text(encoding="utf-8")
+    assert f"`{ATTACHMENT_HEADING}`" in skill
